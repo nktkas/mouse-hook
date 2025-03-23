@@ -1,0 +1,20 @@
+{
+    "name": "@nktkas/mouse-hook",
+    "version": "0.1.0",
+    "exports": "./mod.ts",
+    "imports": {
+        "@derzade/typescript-event-target": "jsr:@derzade/typescript-event-target@1.1.1"
+    },
+    "fmt": {
+        "indentWidth": 4,
+        "lineWidth": 120
+    },
+    "publish": {
+        "exclude": [
+            ".github",
+            "benchmarks"
+        ]
+    },
+    "license": "MIT",
+    "lock": false
+}
