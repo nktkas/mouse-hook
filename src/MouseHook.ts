@@ -1,63 +1,84 @@
 import { TypedEventTarget } from "@derzade/typescript-event-target";
 
-/** Mouse event structure. */
+/**
+ * Contains information about a low-level mouse input event.
+ * @link https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-msllhookstruct
+ */
 export interface MouseEvent {
-    /** X position of the mouse. */
-    x: number;
-    /** Y position of the mouse. */
-    y: number;
-    /** Mouse data (e.g., wheel delta for mouse wheel). */
+    /** The x- and y-coordinates of the cursor, in per-monitor-aware screen coordinates. */
+    pt: Point;
+    /**
+     * The mouse data.
+     * - If the message is WM_MOUSEWHEEL, indicates the distance the wheel is rotated, expressed in multiples or divisions of WHEEL_DELTA, which is 120.
+     * - If the message is WM_XBUTTONDOWN or WM_XBUTTONUP, specifies which X button was pressed or released.
+     * - Otherwise, it is 0.
+     */
     mouseData: number;
-    /** Event flags. */
-    flags: number;
-    /** Time of the event. */
+    /** The event-injected flags. */
+    flags: Flag;
+    /** Time since the system started, in milliseconds. */
     time: number;
+}
+
+/**
+ * The POINT structure defines the x- and y-coordinates of a point.
+ * @link https://learn.microsoft.com/en-us/windows/win32/api/windef/ns-windef-point
+ */
+export interface Point {
+    /** Specifies the x-coordinate of the point. */
+    x: number;
+    /** Specifies the y-coordinate of the point. */
+    y: number;
+}
+
+/**
+ * Disassembled MSLLHOOKSTRUCT flags.
+ * @link https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-msllhookstruct#members
+ */
+export interface Flag {
+    /** Set if the event was injected */
+    injected: boolean;
+    /** Set if the event was injected by a lower IL thread */
+    lowerIlInjected: boolean;
 }
 
 /** Event map for the {@linkcode MouseHook} class. */
 export interface MouseHookEventMap {
+    lbuttondown: CustomEvent<MouseEvent>;
+    lbuttonup: CustomEvent<MouseEvent>;
+    rbuttondown: CustomEvent<MouseEvent>;
+    rbuttonup: CustomEvent<MouseEvent>;
+    mbuttondown: CustomEvent<MouseEvent>;
+    mbuttonup: CustomEvent<MouseEvent>;
+    xbuttondown: CustomEvent<MouseEvent>;
+    xbuttonup: CustomEvent<MouseEvent>;
     mousemove: CustomEvent<MouseEvent>;
-    mousedown: CustomEvent<MouseEvent>;
-    mouseup: CustomEvent<MouseEvent>;
     mousewheel: CustomEvent<MouseEvent>;
 }
 
-/** Enumeration of mouse buttons and their values. */
-export const MouseButton = {
-    Left: 0x0001,
-    Right: 0x0002,
-    Middle: 0x0010,
-    X1: 0x0020,
-    X2: 0x0040,
+/**
+ * Maps Windows message identifiers to mouse event names.
+ * @link https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelmouseproc#wparam-in
+ */
+const MouseEventNameMap = {
+    0x0201: "lbuttondown",
+    0x0202: "lbuttonup",
+    0x0204: "rbuttondown",
+    0x0205: "rbuttonup",
+    0x0207: "mbuttondown",
+    0x0208: "mbuttonup",
+    0x020B: "xbuttondown",
+    0x020C: "xbuttonup",
+    0x0200: "mousemove",
+    0x020A: "mousewheel",
 } as const;
 
-/** A class to hook into mouse events on Windows. */
+/**
+ * A class to globally listen for mouse events in Windows.
+ *
+ * **WARNING**: The class blocks the event loop. Therefore, run it in a separate thread.
+ */
 export class MouseHook extends TypedEventTarget<MouseHookEventMap> {
-    private static readonly WH_MOUSE_LL = 14;
-    private static readonly WM_MOUSEMOVE = 0x0200;
-    private static readonly WM_LBUTTONDOWN = 0x0201;
-    private static readonly WM_LBUTTONUP = 0x0202;
-    private static readonly WM_RBUTTONDOWN = 0x0204;
-    private static readonly WM_RBUTTONUP = 0x0205;
-    private static readonly WM_MBUTTONDOWN = 0x0207;
-    private static readonly WM_MBUTTONUP = 0x0208;
-    private static readonly WM_MOUSEWHEEL = 0x020A;
-    private static readonly WM_XBUTTONDOWN = 0x020B;
-    private static readonly WM_XBUTTONUP = 0x020C;
-
-    private static readonly eventNameMap: Map<number, keyof MouseHookEventMap> = new Map([
-        [MouseHook.WM_MOUSEMOVE, "mousemove"],
-        [MouseHook.WM_LBUTTONDOWN, "mousedown"],
-        [MouseHook.WM_LBUTTONUP, "mouseup"],
-        [MouseHook.WM_RBUTTONDOWN, "mousedown"],
-        [MouseHook.WM_RBUTTONUP, "mouseup"],
-        [MouseHook.WM_MBUTTONDOWN, "mousedown"],
-        [MouseHook.WM_MBUTTONUP, "mouseup"],
-        [MouseHook.WM_MOUSEWHEEL, "mousewheel"],
-        [MouseHook.WM_XBUTTONDOWN, "mousedown"],
-        [MouseHook.WM_XBUTTONUP, "mouseup"],
-    ]);
-
     private readonly user32 = Deno.dlopen("user32.dll", {
         /**
          * Installs an application-defined hook procedure into a hook chain.
@@ -135,40 +156,38 @@ export class MouseHook extends TypedEventTarget<MouseHookEventMap> {
             { parameters: ["i32", "u32", "pointer"], result: "i32" },
             (nCode, wParam, lParam) => {
                 if (nCode >= 0 && lParam !== null) {
-                    const eventName = MouseHook.eventNameMap.get(wParam);
-                    if (eventName) {
-                        const view = new Deno.UnsafePointerView(lParam);
-                        // MSLLHOOKSTRUCT structure:
-                        // https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-msllhookstruct
-                        this.dispatchEvent(
-                            new CustomEvent(eventName, {
-                                detail: {
-                                    // First two DWORD (32-bit) values are x and y coordinates
-                                    x: view.getInt32(0),
-                                    y: view.getInt32(4),
-                                    // Next DWORD is mouseData (wheel delta, xbutton info)
-                                    mouseData: view.getInt32(8),
-                                    // Next DWORD is flags
-                                    flags: view.getUint32(12),
-                                    // Last DWORD is time
-                                    time: view.getUint32(16),
-                                },
-                            }),
-                        );
-                    }
+                    // Get the event name and lParam pointer
+                    const eventName = MouseEventNameMap[wParam as keyof typeof MouseEventNameMap] ?? wParam;
+                    const view = new Deno.UnsafePointerView(lParam);
+
+                    // Get the mouse coordinates
+                    const pt: Point = { x: view.getInt32(0), y: view.getInt32(4) };
+
+                    // Get the mouse data
+                    let mouseData = (view.getInt32(8) >> 16) & 0xFFFF;
+                    if (eventName === "mousewheel" && mouseData & 0x8000) mouseData -= 0x10000;
+
+                    // Get the event flags
+                    const rawFlags = view.getUint32(12);
+                    const flags = {
+                        injected: (rawFlags & 0x01) !== 0,
+                        lowerIlInjected: (rawFlags & 0x02) !== 0,
+                    };
+
+                    // Get the event time
+                    const time = view.getUint32(16);
+
+                    // Dispatch the event
+                    this.dispatchEvent(new CustomEvent(eventName, { detail: { pt, mouseData, flags, time } }));
                 }
                 return this.user32.symbols.CallNextHookEx(null, nCode, wParam, lParam);
             },
         );
 
-        const hookHandle = this.user32.symbols.SetWindowsHookExW(
-            MouseHook.WH_MOUSE_LL,
-            this.callback.pointer,
-            null,
-            0,
-        );
+        const hookHandle = this.user32.symbols.SetWindowsHookExW(14, this.callback.pointer, null, 0);
         if (hookHandle === null) {
-            this.close();
+            this.callback.close();
+            this.user32.close();
             throw new Error("Failed to install mouse hook");
         }
         this.hookHandle = hookHandle;
@@ -176,7 +195,11 @@ export class MouseHook extends TypedEventTarget<MouseHookEventMap> {
         this.user32.symbols.GetMessageW(Deno.UnsafePointer.of(new Uint8Array(48)), null, 0, 0);
     }
 
-    /** Closes the mouse hook and releases resources. */
+    /**
+     * Closes the mouse hook and releases resources.
+     *
+     * **NOTE**: does not work because the event loop is blocked.
+     */
     close(): void {
         this.user32.symbols.PostQuitMessage(0);
         this.user32.symbols.UnhookWindowsHookEx(this.hookHandle);

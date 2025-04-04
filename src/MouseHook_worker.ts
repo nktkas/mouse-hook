@@ -1,7 +1,7 @@
 import { TypedEventTarget } from "@derzade/typescript-event-target";
 import type { MouseHookEventMap } from "./MouseHook.ts";
 
-/** A class to hook into mouse events on Windows using a Worker. */
+/** A class to globally listen for mouse events in Windows. */
 export class MouseHook extends TypedEventTarget<MouseHookEventMap> {
     private readonly worker: Worker;
 
@@ -13,50 +13,27 @@ export class MouseHook extends TypedEventTarget<MouseHookEventMap> {
         const workerCode = `
 // —————————— Mouse Hook ——————————
 
-const WH_MOUSE_LL = 14;
-const WM_MOUSEMOVE = 0x0200;
-const WM_LBUTTONDOWN = 0x0201;
-const WM_LBUTTONUP = 0x0202;
-const WM_RBUTTONDOWN = 0x0204;
-const WM_RBUTTONUP = 0x0205;
-const WM_MBUTTONDOWN = 0x0207;
-const WM_MBUTTONUP = 0x0208;
-const WM_MOUSEWHEEL = 0x020A;
-const WM_XBUTTONDOWN = 0x020B;
-const WM_XBUTTONUP = 0x020C;
-
-const eventNameMap = new Map([
-    [WM_MOUSEMOVE, "mousemove"],
-    [WM_LBUTTONDOWN, "mousedown"],
-    [WM_LBUTTONUP, "mouseup"],
-    [WM_RBUTTONDOWN, "mousedown"],
-    [WM_RBUTTONUP, "mouseup"],
-    [WM_MBUTTONDOWN, "mousedown"],
-    [WM_MBUTTONUP, "mouseup"],
-    [WM_MOUSEWHEEL, "mousewheel"],
-    [WM_XBUTTONDOWN, "mousedown"],
-    [WM_XBUTTONUP, "mouseup"],
-]);
+const MouseEventNameMap = {
+    0x0201: "lbuttondown",
+    0x0202: "lbuttonup",
+    0x0204: "rbuttondown",
+    0x0205: "rbuttonup",
+    0x0207: "mbuttondown",
+    0x0208: "mbuttonup",
+    0x020B: "xbuttondown",
+    0x020C: "xbuttonup",
+    0x0200: "mousemove",
+    0x020A: "mousewheel",
+};
 
 class MouseHook extends EventTarget {
     #user32;
-
     constructor() {
         super();
-
         this.#user32 = Deno.dlopen("user32.dll", {
-            SetWindowsHookExW: {
-                parameters: ["i32", "pointer", "pointer", "u32"],
-                result: "pointer",
-            },
-            CallNextHookEx: {
-                parameters: ["pointer", "i32", "u32", "pointer"],
-                result: "i32",
-            },
-            GetMessageW: {
-                parameters: ["pointer", "pointer", "u32", "u32"],
-                result: "i32",
-            },
+            SetWindowsHookExW: { parameters: ["i32", "pointer", "pointer", "u32"], result: "pointer" },
+            CallNextHookEx: { parameters: ["pointer", "i32", "u32", "pointer"], result: "i32" },
+            GetMessageW: { parameters: ["pointer", "pointer", "u32", "u32"], result: "i32" },
         });
     }
 
@@ -65,27 +42,29 @@ class MouseHook extends EventTarget {
             { parameters: ["i32", "u32", "pointer"], result: "i32" },
             (nCode, wParam, lParam) => {
                 if (nCode >= 0 && lParam !== null) {
-                    const eventName = eventNameMap.get(wParam);
-                    if (eventName) {
-                        const view = new Deno.UnsafePointerView(lParam);
-                        this.dispatchEvent(
-                            new CustomEvent(eventName, {
-                                detail: {
-                                    x: view.getInt32(0),
-                                    y: view.getInt32(4),
-                                    mouseData: view.getInt32(8),
-                                    flags: view.getUint32(12),
-                                    time: view.getUint32(16),
-                                },
-                            }),
-                        );
-                    }
+                    const eventName = MouseEventNameMap[wParam] ?? wParam;
+                    const view = new Deno.UnsafePointerView(lParam);
+
+                    const pt = { x: view.getInt32(0), y: view.getInt32(4) };
+
+                    let mouseData = (view.getInt32(8) >> 16) & 0xFFFF;
+                    if (eventName === "mousewheel" && mouseData & 0x8000) mouseData -= 0x10000;
+
+                    const rawFlags = view.getUint32(12);
+                    const flags = {
+                        injected: (rawFlags & 0x01) !== 0,
+                        lowerIlInjected: (rawFlags & 0x02) !== 0,
+                    };
+
+                    const time = view.getUint32(16);
+
+                    this.dispatchEvent(new CustomEvent(eventName, { detail: { pt, mouseData, flags, time } }));
                 }
                 return this.#user32.symbols.CallNextHookEx(null, nCode, wParam, lParam);
             },
         );
 
-        if (!this.#user32.symbols.SetWindowsHookExW(WH_MOUSE_LL, callback.pointer, null, 0)) {
+        if (!this.#user32.symbols.SetWindowsHookExW(14, callback.pointer, null, 0)) {
             callback.close();
             this.#user32.close();
             self.close();
@@ -98,17 +77,21 @@ class MouseHook extends EventTarget {
 // —————————— Worker ——————————
 
 const hook = new MouseHook();
-hook.addEventListener("mousemove", (event) => {
-    self.postMessage({ type: "mousemove", detail: event.detail });
-});
-hook.addEventListener("mousedown", (event) => {
-    self.postMessage({ type: "mousedown", detail: event.detail });
-});
-hook.addEventListener("mouseup", (event) => {
-    self.postMessage({ type: "mouseup", detail: event.detail });
-});
-hook.addEventListener("mousewheel", (event) => {
-    self.postMessage({ type: "mousewheel", detail: event.detail });
+[
+    "lbuttondown",
+    "lbuttonup",
+    "rbuttondown",
+    "rbuttonup",
+    "mbuttondown",
+    "mbuttonup",
+    "xbuttondown",
+    "xbuttonup",
+    "mousemove",
+    "mousewheel",
+].forEach((eventName) => {
+    hook.addEventListener(eventName, (event) => {
+        self.postMessage({ type: eventName, detail: event.detail });
+    });
 });
 hook.start();
 `;
