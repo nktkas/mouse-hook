@@ -2,7 +2,7 @@ import { TypedEventTarget } from "@derzade/typescript-event-target";
 import type { MouseHookEventMap } from "./MouseHook.ts";
 
 /** A class to globally listen for mouse events in Windows. */
-export class MouseHook extends TypedEventTarget<MouseHookEventMap> {
+export class MouseHook extends TypedEventTarget<MouseHookEventMap> implements Disposable {
     private readonly worker: Worker;
 
     constructor() {
@@ -116,5 +116,9 @@ hook.start();
     /** Closes the mouse hook and releases resources. */
     close(): void {
         this.worker.terminate();
+    }
+
+    [Symbol.dispose](): void {
+        this.close();
     }
 }

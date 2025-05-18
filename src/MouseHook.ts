@@ -78,7 +78,7 @@ const MouseEventNameMap = {
  *
  * **WARNING**: The class blocks the event loop. Therefore, run it in a separate thread.
  */
-export class MouseHook extends TypedEventTarget<MouseHookEventMap> {
+export class MouseHook extends TypedEventTarget<MouseHookEventMap> implements Disposable {
     private readonly user32 = Deno.dlopen("user32.dll", {
         /**
          * Installs an application-defined hook procedure into a hook chain.
@@ -205,5 +205,9 @@ export class MouseHook extends TypedEventTarget<MouseHookEventMap> {
         this.user32.symbols.UnhookWindowsHookEx(this.hookHandle);
         this.callback.close();
         this.user32.close();
+    }
+
+    [Symbol.dispose](): void {
+        this.close();
     }
 }
